@@ -1,0 +1,10 @@
+model:
+  name: "hf-hub:1aurent/swin_tiny_patch4_window7_224.CTransPath"
+  feature_dim: 768
+
+data:
+  tile_size: [224, 224]
+  tile_overlap: [0, 0]
+  mask_threshold: 0.1
+  target_mpp: 1
+  batch_size: 64
