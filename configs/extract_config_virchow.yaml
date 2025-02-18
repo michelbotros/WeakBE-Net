@@ -1,6 +1,6 @@
 model:
-  name: "hf-hub:1aurent/swin_tiny_patch4_window7_224.CTransPath"
-  feature_dim: 768
+  name: "hf-hub:paige-ai/Virchow2"
+  feature_dim: 2560
 
 data:
   tile_size: [224, 224]

@@ -1,0 +1,10 @@
+model:
+  name: "conch_ViT-B-16"
+  feature_dim: 512
+
+data:
+  tile_size: [224, 224]
+  tile_overlap: [0, 0]
+  mask_threshold: 0.1
+  target_mpp: 1
+  batch_size: 64

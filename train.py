@@ -1,18 +1,15 @@
 import argparse
-
+from models import AttentionMIL
 import seaborn as sns
 import wandb
 import yaml
 import os
 import pandas as pd
-
 from matplotlib import pyplot as plt
-
 from data import BagDataset
 from torch.utils.data import DataLoader, Subset
 from sklearn.model_selection import KFold
 import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,17 +21,19 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 
 def train(args):
     """
-    First do binary: nondysplastic vs dysplastic
-    ========= Pipeline ======================
+    - Binary pipeline
     (*) At the end of training run on validation set and store:
     (*)   * ROC plot
-    ======== Data prep ======================
+    Multi-class pipeline
+    (*)
+    (*)
+     - Data prep
     (*) Split: (1) make a file for training (till RL-0950) that marks the SKMS cases to be removed
     (*) Split: (2) split on case level
     (*) Add cases: RL-0927 till RL-0950 (also extract tissue masks => do for the whole dataset while at it)
     (*) Use Ylva's label file instead
-    ========== Feature extraction ===========
-    (*) Extract other features with FOMO models:
+    - Feature extraction
+    (*) Extract other features with FOMO models: (1) Conch, (2) Virchow2, (3) Prov-GigaPath
     (*) Try other spacings: 0.5 mpp and 2 mpp
     """
 
@@ -104,33 +103,6 @@ def train(args):
         best_model.final_validation = True
         trainer.validate(best_model, dataloaders=val_loader)
         run.finish()
-
-
-class AttentionMIL(nn.Module):
-    def __init__(self, feature_dim, hidden_dim, output_dim):
-        super(AttentionMIL, self).__init__()
-        self.attention = nn.Sequential(
-            nn.Linear(feature_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, 1)
-        )
-        self.classifier = nn.Linear(feature_dim, output_dim)
-
-    def forward(self, bag, mask):
-        """
-        Args:
-            bag: (batch_size, bag_size, feature_dim)
-            mask: (batch_size, bag_size)
-        Returns:
-            logits: (batch_size)
-            attn_weights: (batch_size, bag_size)
-        """
-        attn_weights = self.attention(bag).squeeze()
-        attn_weights = attn_weights.masked_fill(mask == 0, float('-inf'))  # mask out padded instances
-        attn_weights = F.softmax(attn_weights, dim=1)
-        weighted_features = torch.sum(bag * attn_weights.unsqueeze(-1), dim=1)
-        logits = self.classifier(weighted_features).squeeze()
-        return logits, attn_weights
 
 
 class BinaryMILModel(pl.LightningModule):
@@ -291,6 +263,7 @@ def get_dataloaders(dataset, k_folds=5, batch_size=4):
         fold = fold + 1
         train_subset = Subset(dataset, train_idx)
         val_subset = Subset(dataset, val_idx)
+
         print("Size train_subset {}".format(len(train_subset)))
         print("Size val_subset {}".format(len(val_subset)))
 
@@ -302,10 +275,10 @@ def get_dataloaders(dataset, k_folds=5, batch_size=4):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run_name", type=str, default='baseline_v3', help="the name of this experiment")
+    parser.add_argument("--run_name", type=str, default='baseline_t', help="the name of this experiment")
     parser.add_argument("--nr_epochs", type=int, default=1500, help="the number of epochs")
     parser.add_argument("--batch_size", type=int, default=64, help="the size of mini batches")
-    parser.add_argument("--lr", type=float, default=1e-4, help="initial the learning rate")
+    parser.add_argument("--lr", type=float, default=1e-5, help="initial the learning rate")
     parser.add_argument("--wd", type=float, default=1e-5, help="weight decay (L2)")
     parser.add_argument("--k_folds", type=int, default=5, help="number of folds")
     parser.add_argument("--exp_dir", type=str,

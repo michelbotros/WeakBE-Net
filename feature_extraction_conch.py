@@ -12,10 +12,12 @@ from torch.utils.data import DataLoader, TensorDataset
 import timm
 from timm.data import resolve_data_config
 from timm.data.transforms_factory import create_transform
+from timm.layers import SwiGLUPacked
 from huggingface_hub import login
 import argparse
 from models import ConvStem
 from PIL import Image, ImageDraw
+from conch.open_clip_custom import create_model_from_pretrained
 
 
 def extract_rois(wsi, wsa, margin=1000):
@@ -84,17 +86,9 @@ def extract_features(sample, model_name, target_mpp=1, tile_size=(224, 224), til
 
     # make the model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    model = timm.create_model(
-        model_name=model_name,
-        embed_layer=ConvStem,  # defined above
-        pretrained=True,
-        num_classes=None
-    ).eval().to(device)
-
-    # get model specific transforms (normalization, resize)
-    data_config = timm.data.resolve_model_data_config(model)
-    transforms = timm.data.create_transform(**data_config, is_training=False)
+    model, preprocess = create_model_from_pretrained('conch_ViT-B-16', "hf_hub:MahmoodLab/conch",
+                                                     hf_auth_token=None)
+    model = model.eval().to(device)
 
     # extract rois + dataset
     rois = extract_rois(wsi, wsa)
@@ -108,13 +102,20 @@ def extract_features(sample, model_name, target_mpp=1, tile_size=(224, 224), til
                                                    mask=wsm)
     # extract coordinates and features
     coords = [np.array(d["coordinates"]) for d in dataset]
-    patches_tensor = torch.stack([transforms(d['image'].convert('RGB')) for d in dataset])
+    patches_tensor = torch.stack([preprocess(d['image'].convert('RGB')) for d in dataset])
     tensor_dataset = TensorDataset(patches_tensor)
     dataloader = DataLoader(tensor_dataset, batch_size=batch_size, shuffle=False)
 
-    with torch.no_grad():
-        feats = torch.cat([model(x[0].to(device)) for x in dataloader],
-                          dim=0)  # (batch_size, num_channels, img_size, img_size)
+    with torch.inference_mode():
+
+        embeddings = []
+        for x in dataloader:
+
+            image = x[0].to(device)
+            image_embedding = model.encode_image(image, proj_contrast=False, normalize=False)
+            embeddings.append(image_embedding)
+
+        feats = torch.cat(embeddings, dim=0)
         print('Features shape: {}\n'.format(feats.shape))
 
     # generate a thumbnail for verification
@@ -136,8 +137,9 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_path", type=str, default='/data/archief/AMC-data/Barrett/LANS/')
+    parser.add_argument("--output_path", type=str, default='/data/archief/AMC-data/Barrett/LANS_features/CONCH/')
     parser.add_argument("--config_file", type=str,
-                        default='/home/mbotros/code/lans_weaksupervised/configs/extract_config.yaml')
+                        default='/home/mbotros/code/lans_weaksupervised/configs/extract_config_conch.yaml')
     args = parser.parse_args()
 
     # make file dataset
@@ -148,6 +150,7 @@ if __name__ == '__main__':
         config = yaml.safe_load(file)
 
     # store the config in the output folder
+    print('Saving features to: {}'.format(args.output_path))
     os.makedirs(args.output_path, exist_ok=True)
     shutil.copy(args.config_file, args.output_path)
 
