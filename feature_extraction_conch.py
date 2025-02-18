@@ -86,8 +86,7 @@ def extract_features(sample, model_name, target_mpp=1, tile_size=(224, 224), til
 
     # make the model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, preprocess = create_model_from_pretrained('conch_ViT-B-16', "hf_hub:MahmoodLab/conch",
-                                                     hf_auth_token=None)
+    model, preprocess = create_model_from_pretrained('conch_ViT-B-16', "hf_hub:MahmoodLab/conch")
     model = model.eval().to(device)
 
     # extract rois + dataset
