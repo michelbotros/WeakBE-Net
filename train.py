@@ -6,13 +6,10 @@ import yaml
 import os
 import pandas as pd
 from matplotlib import pyplot as plt
-from data import BagDataset
-from torch.utils.data import DataLoader, Subset
-from sklearn.model_selection import KFold
+from data import BagDataset, get_dataloaders
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import pytorch_lightning as pl
 from torchmetrics.classification import BinaryAccuracy, BinaryAUROC, BinaryPrecision, BinaryRecall, ConfusionMatrix
 from torchmetrics.classification import MulticlassAccuracy
@@ -48,20 +45,21 @@ def train(args):
     with open(os.path.join(args.features_dir, 'extract_config.yaml')) as file:
         feat_extraction_config = yaml.safe_load(file)
 
-    # load the feature extraction config that was used
-    config = {'feature_extraction_config': feat_extraction_config,
-              'hidden_dim': args.hidden_dim,
-              'nr_epochs': args.nr_epochs,
-              'batch_size': args.batch_size,
-              'lr': args.lr,
-              'wd': args.wd,
-              'k_folds': args.k_folds,
-              'drop out': args.drop_out}
-
     print('Running {} folds total'.format(args.k_folds))
-    for fold, train_loader, val_loader in get_dataloaders(dataset, k_folds=args.k_folds, batch_size=args.batch_size):
+    for fold, train_loader, val_loader, class_weights in get_dataloaders(dataset, k_folds=args.k_folds, batch_size=args.batch_size):
         fold_dir = os.path.join(args.exp_dir, '{}_fold_{}'.format(args.run_name, fold))
         os.makedirs(fold_dir, exist_ok=True)
+
+        # load the feature extraction config that was used
+        config = {'feature_extraction_config': feat_extraction_config,
+                  'hidden_dim': args.hidden_dim,
+                  'nr_epochs': args.nr_epochs,
+                  'batch_size': args.batch_size,
+                  'lr': args.lr,
+                  'wd': args.wd,
+                  'k_folds': args.k_folds,
+                  'drop out': args.drop_out,
+                  'class weights:': class_weights.numpy()}
 
         print('Starting fold {}'.format(fold))
         run = wandb.init(project=args.project_name,
@@ -83,7 +81,8 @@ def train(args):
                          wd=args.wd,
                          drop_out=args.drop_out,
                          run_dir=fold_dir,
-                         binary=args.binary)
+                         binary=args.binary,
+                         class_weights=class_weights)
 
         trainer = pl.Trainer(max_epochs=args.nr_epochs,
                              devices=[0],
@@ -110,13 +109,24 @@ class MILModel(pl.LightningModule):
     """ Implements a standard MIL model for classification.
     """
 
-    def __init__(self, feature_dim=1000, hidden_dim=512, lr=1e-5, wd=1e-4, drop_out=0.2, binary=False, run_dir=None):
+    def __init__(self,
+                 feature_dim=512,
+                 hidden_dim=512,
+                 lr=1e-5,
+                 wd=1e-4,
+                 drop_out=0.2,
+                 class_weights=None,
+                 binary=False,
+                 run_dir=None):
+
         super(MILModel, self).__init__()
         self.output_dim = 1 if binary else 3
         self.model = AttentionMIL(feature_dim, hidden_dim, output_dim=self.output_dim, drop_out=drop_out)
-        self.criterion = nn.BCEWithLogitsLoss() if binary else nn.CrossEntropyLoss()
         self.lr = lr
         self.wd = wd
+
+        # Use class weights for multi class, binary was almost equal already
+        self.criterion = nn.BCEWithLogitsLoss() if binary else nn.CrossEntropyLoss(weight=class_weights)
 
         # Metrics + Confusion Matrix
         if binary:
@@ -246,67 +256,17 @@ class MILModel(pl.LightningModule):
         return torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.wd)
 
 
-def collate_fn(batch):
-    """ Makes sure batches are the same length by padding. A mask is used to keep track of padded instances.
-
-    Args:
-        batch: (n_feat, n_labels, n_coords, n_block_ids)
-    """
-    features, labels, coords, block_ids = zip(*batch)
-    max_patches = max(f.shape[0] for f in features)
-
-    padded_features = []
-    masks = []
-    for f in features:
-        pad_size = max_patches - f.shape[0]
-        padded = F.pad(f, (0, 0, 0, pad_size))
-        mask = torch.cat([torch.ones(f.shape[0]), torch.zeros(pad_size)])
-        padded_features.append(padded)
-        masks.append(mask)
-
-    return torch.stack(padded_features), torch.stack(masks), torch.tensor(labels), coords, block_ids
-
-
-def get_dataloaders(dataset, k_folds=5, batch_size=4):
-    """ Splits the data for KFold cross validation
-    todo: assure split on case level: how?
-
-    Args:
-        dataset:
-        k_folds:
-        batch_size:
-    Returns:
-         fold:
-         train_loader:
-         val_loader:
-    """
-    kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
-
-    for fold, (train_idx, val_idx) in enumerate(kfold.split(dataset)):
-        fold = fold + 1
-        train_subset = Subset(dataset, train_idx)
-        val_subset = Subset(dataset, val_idx)
-
-        print("Size train_subset {}".format(len(train_subset)))
-        print("Size val_subset {}".format(len(val_subset)))
-
-        train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-        val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-
-        yield fold, train_loader, val_loader
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run_name", type=str, default='baseline_CONCHO_1', help="the name of this experiment")
-    parser.add_argument("--project_name", type=str, default='WeakBE-Net_binary', help="the name of this project")
-    parser.add_argument("--binary", type=bool, default=True, help="whether to run in binary setup")
+    parser.add_argument("--run_name", type=str, default='baseline_CONCH', help="the name of this experiment")
+    parser.add_argument("--project_name", type=str, default='WeakBE-Net_multiclass', help="the name of this project")
+    parser.add_argument("--binary", type=bool, default=False, help="whether to run in binary setup")
     parser.add_argument("--nr_epochs", type=int, default=2500, help="the number of epochs")
     parser.add_argument("--batch_size", type=int, default=64, help="the size of mini batches")
     parser.add_argument("--hidden_dim", type=int, default=512, help="hidden dimension")
     parser.add_argument("--lr", type=float, default=1e-5, help="initial the learning rate")
-    parser.add_argument("--wd", type=float, default=1e-4, help="weight decay (L2)")
-    parser.add_argument("--drop_out", type=float, default=0.1, help="drop out rate")
+    parser.add_argument("--wd", type=float, default=1e-5, help="weight decay (L2)")
+    parser.add_argument("--drop_out", type=float, default=0.0, help="drop out rate")
     parser.add_argument("--k_folds", type=int, default=5, help="number of folds")
     parser.add_argument("--exp_dir", type=str,
                         default='/home/mbotros/experiments/lans_weaklysupervised/')

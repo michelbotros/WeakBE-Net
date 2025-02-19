@@ -3,6 +3,10 @@ import pandas as pd
 import os
 import torch
 import numpy as np
+from torch.utils.data import DataLoader, Subset
+from sklearn.model_selection import KFold
+import torch.nn.functional as F
+from sklearn.utils.class_weight import compute_class_weight
 
 
 def filter_image_files(image_files):
@@ -113,4 +117,62 @@ class BagDataset:
         block_id = self.block_ids[idx]
 
         return features, label, coordinates, block_id
+
+
+def collate_fn(batch):
+    """ Makes sure batches are the same length by padding. A mask is used to keep track of padded instances.
+
+    Args:
+        batch: (n_feat, n_labels, n_coords, n_block_ids)
+    """
+    features, labels, coords, block_ids = zip(*batch)
+    max_patches = max(f.shape[0] for f in features)
+
+    padded_features = []
+    masks = []
+    for f in features:
+        pad_size = max_patches - f.shape[0]
+        padded = F.pad(f, (0, 0, 0, pad_size))
+        mask = torch.cat([torch.ones(f.shape[0]), torch.zeros(pad_size)])
+        padded_features.append(padded)
+        masks.append(mask)
+
+    return torch.stack(padded_features), torch.stack(masks), torch.tensor(labels), coords, block_ids
+
+
+def get_class_weights(dataset):
+    labels = [label.item() for _, label, _, _ in dataset]
+    class_weights = compute_class_weight('balanced', classes=np.unique(labels), y=labels)
+    return torch.tensor(class_weights, dtype=torch.float)
+
+
+def get_dataloaders(dataset, k_folds=5, batch_size=4):
+    """ Splits the data for KFold cross validation
+    todo: assure split on case level: how?
+
+    Args:
+        dataset:
+        k_folds:
+        batch_size:
+    Returns:
+         fold:
+         train_loader:
+         val_loader:
+    """
+    kfold = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+
+    for fold, (train_idx, val_idx) in enumerate(kfold.split(dataset)):
+        fold = fold + 1
+        train_subset = Subset(dataset, train_idx)
+        val_subset = Subset(dataset, val_idx)
+        class_weights = get_class_weights(train_subset)
+
+        print("Size train_subset: {}".format(len(train_subset)))
+        print("Class weights train_subset: {}".format(class_weights))
+        print("Size val_subset: {}".format(len(val_subset)))
+
+        train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+        val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+
+        yield fold, train_loader, val_loader, class_weights
 
