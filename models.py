@@ -36,6 +36,8 @@ def build_encoder(n_feats: int, z_dim: int, encoder_layers: int, activation_func
 
     Returns:
     - encoder: Encoder network
+
+    Linear > BN > Activation > Dropout
     """
     layers = []
     for i in range(encoder_layers):
@@ -178,11 +180,12 @@ class clam_mil(nn.Module):
 
 
 class AttentionMIL(nn.Module):
-    def __init__(self, feature_dim, hidden_dim, output_dim):
+    def __init__(self, feature_dim, hidden_dim, output_dim, drop_out=0.2):
         super(AttentionMIL, self).__init__()
         self.attention = nn.Sequential(
             nn.Linear(feature_dim, hidden_dim),
             nn.Tanh(),
+            nn.Dropout(drop_out),
             nn.Linear(hidden_dim, 1)
         )
         self.classifier = nn.Linear(feature_dim, output_dim)

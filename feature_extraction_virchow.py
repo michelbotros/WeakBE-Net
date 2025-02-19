@@ -86,7 +86,6 @@ def extract_features(sample, model_name, target_mpp=1, tile_size=(224, 224), til
     # make the model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    login()
     # need to specify MLP layer and activation function for proper init
     model = timm.create_model(model_name,
                               pretrained=True,
@@ -168,6 +167,8 @@ if __name__ == '__main__':
     print('Saving features to: {}'.format(args.output_path))
     os.makedirs(args.output_path, exist_ok=True)
     shutil.copy(args.config_file, args.output_path)
+
+    login()
 
     # start extraction
     for sample in lans_file_dataset:
